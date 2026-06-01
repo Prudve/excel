@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Row Swapper, Highlight & Delete</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 30px;
+            background-color: #f9f9f9;
+            color: #333;
+        }
+        h2 { color: #2c3e50; }
+        .upload-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .instruction {
+            font-size: 0.95rem;
+            color: #555;
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: 600;
+            user-select: none;
+        }
+        th.selectable-header {
+            cursor: pointer;
+            position: relative;
+            transition: background-color 0.2s;
+        }
+        th.selectable-header:hover {
+            background-color: #3e8e41;
+        }
+        th.selectable-header::after {
+            content: " 🔍";
+            font-size: 0.8rem;
+            opacity: 0.7;
+        }
+        th.active-sort-header {
+            background-color: #1e5a22 !important;
+        }
+        
+        /* Interactive clickable data cells */
+        #table-body tr td.clickable-cell {
+            cursor: pointer;
+            transition: background-color 0.15s;
+        }
+        #table-body tr td.clickable-cell:hover {
+            background-color: #ffebee !important; /* Light red tint indicating deletion action */
+            color: #c62828;
+        }
+
+        tr:hover { background-color: #f5f5f5; }
+        .btn {
+            padding: 6px 12px;
+            margin: 0 2px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn-up { background-color: #2196F3; color: white; }
+        .btn-up:hover { background-color: #0b7dda; }
+        .btn-down { background-color: #ff9800; color: white; }
+        .btn-down:hover { background-color: #e68a00; }
+        .action-col { min-width: 130px; text-align: center; }
+        
+        .highlight-blue {
+            background-color: #d0e1fd !important;
+            color: #0d3c81 !important;
+            font-weight: bold;
+        }
+        .highlight-red {
+            background-color: #fdd0d0 !important;
+            color: #810d0d !important;
+            font-weight: bold;
+        }
+
+        /* Fixed Serial Numbers */
+        table {
+            counter-reset: rowNumber;
+        }
+        #table-body tr {
+            counter-increment: rowNumber;
+        }
+        #table-body tr td:first-child::before {
+            content: counter(rowNumber);
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Excel Sheet Row Manipulator</h2>
+    
+    <div class="upload-section">
+        <label for="excel-file"><strong>Choose Excel File (.xlsx or .xls):</strong> </label>
+        <input type="file" id="excel-file" accept=".xlsx, .xls" />
+        <div id="instructions" style="display:none; margin-top: 10px;">
+            <p class="instruction">💡 <strong>Tip 1:</strong> Click on any green header column to highlight duplicate values.</p>
+            <p class="instruction">🗑️ <strong>Tip 2:</strong> Click directly on any text/data cell to get an option to delete that entire row.</p>
+        </div>
+    </div>
+
+    <table id="data-table" style="display: none;">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+    </table>
+
+    <script>
+        let currentSelectedColIndex = null;
+
+        document.getElementById('excel-file').addEventListener('change', handleFile, false);
+
+        function handleFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+                    const cleanData = jsonData.filter(row => row.some(cell => cell !== ""));
+
+                    if (cleanData.length > 0) {
+                        renderTable(cleanData);
+                        document.getElementById('instructions').style.display = "block";
+                    } else {
+                        alert("The selected sheet appears to be empty.");
+                    }
+                } catch (error) {
+                    console.error(error);
+                    alert("Error parsing Excel file.");
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function renderTable(data) {
+            const headContainer = document.getElementById('table-head');
+            const bodyContainer = document.getElementById('table-body');
+            const table = document.getElementById('data-table');
+            
+            headContainer.innerHTML = "";
+            bodyContainer.innerHTML = "";
+
+            const rawHeaders = data[0];
+            let startIndex = 0;
+
+            const firstHeaderLower = String(rawHeaders[0]).toLowerCase().trim();
+            if (firstHeaderLower === 's.no' || firstHeaderLower === 'sno' || firstHeaderLower === 'id' || firstHeaderLower === '#') {
+                startIndex = 1; 
+            }
+
+            // 1. Render Headers
+            const headerRow = document.createElement('tr');
+            
+            const snoTh = document.createElement('th');
+            snoTh.textContent = "S.No";
+            headerRow.appendChild(snoTh);
+
+            for (let i = startIndex; i < rawHeaders.length; i++) {
+                const th = document.createElement('th');
+                th.textContent = rawHeaders[i] !== undefined ? rawHeaders[i] : `Column ${i + 1}`;
+                th.className = "selectable-header";
+                const visualColIndex = i - startIndex + 1; 
+                th.onclick = function() { highlightDuplicates(visualColIndex, this); };
+                headerRow.appendChild(th);
+            }
+            
+            const actionTh = document.createElement('th');
+            actionTh.textContent = "Actions";
+            actionTh.className = "action-col";
+            headerRow.appendChild(actionTh);
+            headContainer.appendChild(headerRow);
+
+            // 2. Render Data Rows
+            for (let i = 1; i < data.length; i++) {
+                const rowData = data[i];
+                const tr = document.createElement('tr');
+
+                // Serial Number cell (Not clickable for deletion to protect UX)
+                const snoTd = document.createElement('td');
+                snoTd.style.fontWeight = "bold"; 
+                tr.appendChild(snoTd);
+
+                // Populate regular data cells
+                for (let j = startIndex; j < rawHeaders.length; j++) {
+                    const td = document.createElement('td');
+                    td.textContent = rowData[j] !== undefined ? rowData[j] : "";
+                    td.className = "clickable-cell";
+                    
+                    // The core deletion function when cell is clicked
+                    td.onclick = function(event) {
+                        // Ensure we don't accidentally intercept button clicks inside the row
+                        if(event.target === this) {
+                            askToDeleteRow(this.parentElement);
+                        }
+                    };
+                    tr.appendChild(td);
+                }
+
+                // Append up/down action buttons
+                const actionTd = document.createElement('td');
+                actionTd.className = "action-col";
+                
+                const upBtn = document.createElement('button');
+                upBtn.className = "btn btn-up";
+                upBtn.textContent = "▲ Up";
+                upBtn.onclick = function() { moveRow(this, 'up'); };
+
+                const downBtn = document.createElement('button');
+                downBtn.className = "btn btn-down";
+                downBtn.textContent = "▼ Down";
+                downBtn.onclick = function() { moveRow(this, 'down'); };
+
+                actionTd.appendChild(upBtn);
+                actionTd.appendChild(downBtn);
+                tr.appendChild(actionTd);
+                
+                bodyContainer.appendChild(tr);
+            }
+
+            table.style.display = "table";
+            currentSelectedColIndex = null; 
+        }
+
+        function askToDeleteRow(rowElement) {
+            // Grab a snippet of text from the row to show the user what they are deleting
+            const fallbackText = rowElement.getElementsByTagName('td')[1]?.textContent || "";
+            const confirmation = confirm(`Are you sure you want to delete the row containing: "${fallbackText}"?`);
+            
+            if (confirmation) {
+                rowElement.remove();
+                // Refresh highlights if a duplicate check is currently open
+                triggerHighlightRefresh();
+            }
+        }
+
+        function highlightDuplicates(colIndex, headerElement) {
+            currentSelectedColIndex = colIndex;
+            const tbody = document.getElementById('table-body');
+            const rows = tbody.getElementsByTagName('tr');
+            
+            document.querySelectorAll('.selectable-header').forEach(th => th.classList.remove('active-sort-header'));
+            headerElement.classList.add('active-sort-header');
+
+            const valueCounts = {};
+            for (let i = 0; i < rows.length; i++) {
+                const cell = rows[i].getElementsByTagName('td')[colIndex];
+                if (cell) {
+                    cell.classList.remove('highlight-blue', 'highlight-red');
+                    const val = cell.textContent.trim();
+                    if (val !== "") {
+                        valueCounts[val] = (valueCounts[val] || 0) + 1;
+                    }
+                }
+            }
+
+            const duplicateColorMap = {};
+            let colorToggle = true; 
+
+            for (const val in valueCounts) {
+                if (valueCounts[val] > 1) {
+                    duplicateColorMap[val] = colorToggle ? 'highlight-blue' : 'highlight-red';
+                    colorToggle = !colorToggle; 
+                }
+            }
+
+            for (let i = 0; i < rows.length; i++) {
+                const cell = rows[i].getElementsByTagName('td')[colIndex];
+                if (cell) {
+                    const val = cell.textContent.trim();
+                    if (duplicateColorMap[val]) {
+                        cell.classList.add(duplicateColorMap[val]);
+                    }
+                }
+            }
+        }
+
+        function moveRow(button, direction) {
+            const currentRow = button.parentElement.parentElement;
+            const tbody = document.getElementById('table-body');
+
+            if (direction === 'up') {
+                const previousRow = currentRow.previousElementSibling;
+                if (previousRow) {
+                    tbody.insertBefore(currentRow, previousRow);
+                }
+            } else if (direction === 'down') {
+                const nextRow = currentRow.nextElementSibling;
+                if (nextRow) {
+                    tbody.insertBefore(nextRow, currentRow);
+                }
+            }
+
+            triggerHighlightRefresh();
+        }
+
+        function triggerHighlightRefresh() {
+            if (currentSelectedColIndex !== null) {
+                const activeHeader = document.querySelector('.active-sort-header');
+                if (activeHeader) {
+                    highlightDuplicates(currentSelectedColIndex, activeHeader);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
